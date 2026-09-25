@@ -25,10 +25,6 @@ const SNAP_DISTANCE_RATIO = 0.45;
 const GRID = 3;
 const LOAD_TIMEOUT_MS = 20000;
 
-const PHOTOBOOTH_CONTRAST_ALPHA = 1.3;
-const PHOTOBOOTH_BRIGHTNESS_BETA = 10;
-const PHOTOBOOTH_NOISE_STD = 15;
-
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
   [0, 5], [5, 6], [6, 7], [7, 8],
@@ -80,6 +76,147 @@ const shatter = {
 
 const STRIP_MAX_PHOTOS = 3;
 const galleryEntries = [];
+
+// ============================================================================
+// Modular Filter Algorithms & Dispatcher
+// ============================================================================
+
+function clamp(val) {
+  return Math.max(0, Math.min(255, val));
+}
+
+function gaussianNoise(std) {
+  const u1 = Math.random() || 1e-6;
+  const u2 = Math.random();
+  const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+  return z0 * std;
+}
+
+// 1. Moody 35mm Analog Film: Lifted faded shadows, olive/golden tones, fine grain
+function filterVintage35(imageData) {
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i];
+    let g = d[i + 1];
+    let b = d[i + 2];
+
+    r = r * 0.85 + 24;
+    g = g * 0.90 + 20;
+    b = b * 0.75 + 16;
+
+    r = r * 1.05;
+    g = g * 1.04;
+    b = b * 0.88;
+
+    const noise = gaussianNoise(12);
+    d[i] = clamp(r + noise);
+    d[i + 1] = clamp(g + noise);
+    d[i + 2] = clamp(b + noise);
+  }
+  return imageData;
+}
+
+// 2. 90s Disposable Flash: High contrast, saturated midtones, cool ambient shadows
+function filterDisposable90s(imageData) {
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i];
+    let g = d[i + 1];
+    let b = d[i + 2];
+
+    r = ((r / 255 - 0.5) * 1.25 + 0.5) * 255;
+    g = ((g / 255 - 0.5) * 1.25 + 0.5) * 255;
+    b = ((b / 255 - 0.5) * 1.20 + 0.5) * 255;
+
+    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+    r = gray + (r - gray) * 1.35;
+    g = gray + (g - gray) * 1.35;
+    b = gray + (b - gray) * 1.25;
+
+    if (gray < 80) {
+      g += 8;
+      b += 14;
+    }
+
+    const noise = gaussianNoise(15);
+    d[i] = clamp(r + noise);
+    d[i + 1] = clamp(g + noise);
+    d[i + 2] = clamp(b + noise);
+  }
+  return imageData;
+}
+
+// 3. Warm Retro Pastel / Portra: Creamy contrast, gentle magenta/peach warmth
+function filterWarmPastel(imageData) {
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i];
+    let g = d[i + 1];
+    let b = d[i + 2];
+
+    r = Math.pow(r / 255, 0.92) * 255;
+    g = Math.pow(g / 255, 0.96) * 255;
+    b = Math.pow(b / 255, 1.05) * 255;
+
+    r = r * 1.12 + 6;
+    g = g * 0.98 + 4;
+    b = b * 0.92;
+
+    const noise = gaussianNoise(8);
+    d[i] = clamp(r + noise);
+    d[i + 1] = clamp(g + noise);
+    d[i + 2] = clamp(b + noise);
+  }
+  return imageData;
+}
+
+// 4. Classic Monochrome Photo Booth: High contrast B&W with noise
+function filterPhotobooth(imageData) {
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    let v = gray * 1.3 + 10;
+    v += gaussianNoise(15);
+    d[i] = d[i + 1] = d[i + 2] = clamp(v);
+  }
+  return imageData;
+}
+
+// 5. Bypass / Raw
+function filterRaw(imageData) {
+  return imageData;
+}
+
+const FILTERS = {
+  vintage35: filterVintage35,
+  disposable90s: filterDisposable90s,
+  warmPastel: filterWarmPastel,
+  photobooth: filterPhotobooth,
+  none: filterRaw,
+};
+
+let currentFilter = "vintage35";
+
+function applyActiveFilter(imageData) {
+  const processor = FILTERS[currentFilter] || FILTERS.none;
+  return processor(imageData);
+}
+
+function applyFilterInsideBox(box) {
+  const x = Math.max(0, Math.round(box.x));
+  const y = Math.max(0, Math.round(box.y));
+  const w = Math.min(canvas.width - x, Math.round(box.width));
+  const h = Math.min(canvas.height - y, Math.round(box.height));
+  if (w <= 0 || h <= 0) return;
+
+  const region = ctx.getImageData(x, y, w, h);
+  applyActiveFilter(region);
+  ctx.putImageData(region, x, y);
+}
+
+// ============================================================================
+// Gallery & Photo Strip Export
+// ============================================================================
 
 function addToGallery(snapshotCanvas) {
   if (galleryEntries.length >= STRIP_MAX_PHOTOS) return;
@@ -211,6 +348,10 @@ function resetPuzzleOnly() {
   updateProgressBadge();
 }
 
+// ============================================================================
+// Viewport & Hardware Initialization
+// ============================================================================
+
 function fitCanvasToWindow() {
   const stageEl = document.getElementById("stage");
   const vw = stageEl.clientWidth;
@@ -238,7 +379,7 @@ async function initWebcam() {
     throw new Error("This browser does not support getUserMedia.");
   }
   const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" },
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
     audio: false,
   });
   videoEl.srcObject = stream;
@@ -271,7 +412,7 @@ async function initHandLandmarker() {
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
       ),
       LOAD_TIMEOUT_MS,
-      "Timed out loading MediaPipe runtime (WASM). Please check your internet connection or whether cdn.jsdelivr.net is blocked."
+      "MediaPipe runtime (WASM) loading timed out. Check your internet connection or if cdn.jsdelivr.net is blocked."
     );
   } catch (err) {
     throw err;
@@ -292,11 +433,11 @@ async function initHandLandmarker() {
         minTrackingConfidence: 0.6,
       }),
       LOAD_TIMEOUT_MS,
-      "Timed out downloading the HandLandmarker model (~10MB) with GPU."
+      "Timed out downloading HandLandmarker model (~10MB) with GPU."
     );
     return handLandmarker;
   } catch (gpuErr) {
-    console.warn("[PuzzleCam] Failed with GPU delegate, retrying with CPU…", gpuErr);
+    console.warn("[PuzzleCam] Failed with GPU delegate, retrying with CPU...", gpuErr);
   }
 
   try {
@@ -314,13 +455,17 @@ async function initHandLandmarker() {
         minTrackingConfidence: 0.6,
       }),
       LOAD_TIMEOUT_MS,
-      "Timed out downloading the HandLandmarker model (~10MB) even with CPU. Check your connection or whether storage.googleapis.com is blocked on your network."
+      "Timed out downloading HandLandmarker model (~10MB) even with CPU. Check your connection or if storage.googleapis.com is blocked on your network."
     );
     return handLandmarker;
   } catch (cpuErr) {
     throw cpuErr;
   }
 }
+
+// ============================================================================
+// Gesture Detection & Math Helpers
+// ============================================================================
 
 function dist2D(a, b) {
   const dx = a.x - b.x;
@@ -373,7 +518,6 @@ function computeHandFrame(indexTipA, indexTipB) {
 }
 
 const freezeGate = { holding: false, since: 0 };
-
 const FRAME_GRACE_MS = 450;
 const lastSeenFrame = { box: null, at: 0 };
 
@@ -398,7 +542,7 @@ function drawCountdownOverlay(box) {
     return;
   }
 
-  applyBWInsideBox(box);
+  applyFilterInsideBox(box);
 
   ctx.save();
   ctx.strokeStyle = "#f5c518";
@@ -422,25 +566,6 @@ function drawCountdownOverlay(box) {
   statusText.textContent = `capturing in ${n}…`;
 }
 
-function gaussianNoise(std) {
-  const u1 = Math.random() || 1e-6;
-  const u2 = Math.random();
-  const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-  return z0 * std;
-}
-
-function applyPhotoboothEffect(imageData) {
-  const d = imageData.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    let v = gray * PHOTOBOOTH_CONTRAST_ALPHA + PHOTOBOOTH_BRIGHTNESS_BETA;
-    v += gaussianNoise(PHOTOBOOTH_NOISE_STD);
-    v = Math.max(0, Math.min(255, v));
-    d[i] = d[i + 1] = d[i + 2] = v;
-  }
-  return imageData;
-}
-
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -448,6 +573,10 @@ function shuffle(arr) {
   }
   return arr;
 }
+
+// ============================================================================
+// Snapshot Slicing & Puzzle Generation
+// ============================================================================
 
 function finishCountdownAndCapture(box) {
   countdown.active = false;
@@ -473,7 +602,7 @@ function finishCountdownAndCapture(box) {
   );
 
   const fullImageData = cropCtx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
-  applyPhotoboothEffect(fullImageData);
+  applyActiveFilter(fullImageData);
   cropCtx.putImageData(fullImageData, 0, 0);
 
   puzzle.fullPhotoboothCanvas = cropCanvas;
@@ -711,6 +840,10 @@ function clampPieceToBoard(piece) {
   piece.y = Math.min(Math.max(piece.y, box.y), box.y + box.height - piece.h);
 }
 
+// ============================================================================
+// Canvas Overlays & Skeletons
+// ============================================================================
+
 function drawBoardAndPieces() {
   const box = puzzle.boardBox;
 
@@ -787,18 +920,6 @@ function drawVideoFrame() {
   ctx.restore();
 }
 
-function applyBWInsideBox(box) {
-  const x = Math.max(0, Math.round(box.x));
-  const y = Math.max(0, Math.round(box.y));
-  const w = Math.min(canvas.width - x, Math.round(box.width));
-  const h = Math.min(canvas.height - y, Math.round(box.height));
-  if (w <= 0 || h <= 0) return;
-
-  const region = ctx.getImageData(x, y, w, h);
-  applyPhotoboothEffect(region);
-  ctx.putImageData(region, x, y);
-}
-
 function drawLiveFrameOverlay(box) {
   ctx.save();
   ctx.strokeStyle = "#f5c518";
@@ -873,6 +994,10 @@ function drawHandSkeletonsOverBoard(handsLandmarks, box) {
     }
   }
 }
+
+// ============================================================================
+// Shatter Physics Animation
+// ============================================================================
 
 function startShatter(sourceCanvas, box) {
   const cols = SHATTER_COLS;
@@ -989,6 +1114,10 @@ function handleFistReset() {
   }
 }
 
+// ============================================================================
+// Core State Machine & Gesture Processing
+// ============================================================================
+
 let handLandmarker = null;
 let fistHoldCounter = 0;
 
@@ -1014,7 +1143,7 @@ function processResults(result) {
     if (appState === "tracking") {
       const sinceLastSeen = performance.now() - lastSeenFrame.at;
       if (lastSeenFrame.box && sinceLastSeen < FRAME_GRACE_MS) {
-        applyBWInsideBox(lastSeenFrame.box);
+        applyFilterInsideBox(lastSeenFrame.box);
         drawLiveFrameOverlay(lastSeenFrame.box);
       }
       statusText.textContent = isStripFull()
@@ -1033,7 +1162,7 @@ function processResults(result) {
       updateProgressBadge();
       drawBoardAndPieces();
       statusText.textContent = puzzle.solved
-        ? "puzzle complete! make a fist to save it"
+        ? "puzzle complete! close fist to save"
         : "solve the puzzle with pinch";
       return;
     }
@@ -1068,7 +1197,7 @@ function processResults(result) {
       const frameBox = computeHandFrame(indexA, indexB);
 
       if (frameBox.width > 4 && frameBox.height > 4) {
-        applyBWInsideBox(frameBox);
+        applyFilterInsideBox(frameBox);
         drawLiveFrameOverlay(frameBox);
         lastSeenFrame.box = frameBox;
         lastSeenFrame.at = performance.now();
@@ -1089,17 +1218,17 @@ function processResults(result) {
         }
       } else {
         freezeGate.holding = false;
-        statusText.textContent = "tracking hands";
+        statusText.textContent = "hands tracking";
       }
     } else {
       freezeGate.holding = false;
       const sinceLastSeen = performance.now() - lastSeenFrame.at;
       if (lastSeenFrame.box && sinceLastSeen < FRAME_GRACE_MS) {
-        applyBWInsideBox(lastSeenFrame.box);
+        applyFilterInsideBox(lastSeenFrame.box);
         drawLiveFrameOverlay(lastSeenFrame.box);
-        statusText.textContent = "tracking hands";
+        statusText.textContent = "hands tracking";
       } else {
-        statusText.textContent = "tracking hands";
+        statusText.textContent = "hands tracking";
       }
     }
     return;
@@ -1135,7 +1264,7 @@ function processResults(result) {
     statusText.textContent = puzzle.solved
       ? (fistHoldCounter > 0
           ? `saving… hold fist (${fistHoldCounter}/${FIST_HOLD_FRAMES})`
-          : "puzzle complete! make a fist to save it")
+          : "puzzle complete! close fist to save")
       : "solve the puzzle with pinch";
   }
 }
@@ -1198,12 +1327,16 @@ async function boot() {
     if (err && err.name === "NotAllowedError") {
       showLoaderError("Camera permission denied. Enable it in your browser settings and click retry.");
     } else if (err && err.name === "NotFoundError") {
-      showLoaderError("No available webcam found.");
+      showLoaderError("No webcam found.");
     } else {
-      showLoaderError((err && err.message) || "Error initializing the app.");
+      showLoaderError((err && err.message) || "Error initializing app.");
     }
   }
 }
+
+// ============================================================================
+// UI Event Listeners
+// ============================================================================
 
 loaderRetry.addEventListener("click", () => {
   boot();
@@ -1217,10 +1350,19 @@ if (downloadStripBtn) {
 if (resetAllBtn) {
   resetAllBtn.addEventListener("click", () => {
     const confirmed = window.confirm(
-      "Are you sure you want to delete the entire photo strip and start over?"
+      "Are you sure you want to clear the entire photo strip and start over?"
     );
     if (confirmed) resetEverything();
   });
 }
+
+const filterButtons = document.querySelectorAll(".filter-btn");
+filterButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    filterButtons.forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentFilter = btn.dataset.filter || "none";
+  });
+});
 
 boot();
