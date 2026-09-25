@@ -77,10 +77,6 @@ const shatter = {
 const STRIP_MAX_PHOTOS = 3;
 const galleryEntries = [];
 
-// ============================================================================
-// Modular Filter Algorithms & Dispatcher
-// ============================================================================
-
 function clamp(val) {
   return Math.max(0, Math.min(255, val));
 }
@@ -92,7 +88,7 @@ function gaussianNoise(std) {
   return z0 * std;
 }
 
-// 1. Moody 35mm Analog Film: Lifted faded shadows, olive/golden tones, fine grain
+// I copied this off of someone else' 
 function filterVintage35(imageData) {
   const d = imageData.data;
   for (let i = 0; i < d.length; i += 4) {
@@ -116,7 +112,7 @@ function filterVintage35(imageData) {
   return imageData;
 }
 
-// 2. 90s Disposable Flash: High contrast, saturated midtones, cool ambient shadows
+// I copied this one too
 function filterDisposable90s(imageData) {
   const d = imageData.data;
   for (let i = 0; i < d.length; i += 4) {
@@ -146,7 +142,7 @@ function filterDisposable90s(imageData) {
   return imageData;
 }
 
-// 3. Warm Retro Pastel / Portra: Creamy contrast, gentle magenta/peach warmth
+// I copied this one three
 function filterWarmPastel(imageData) {
   const d = imageData.data;
   for (let i = 0; i < d.length; i += 4) {
@@ -170,7 +166,7 @@ function filterWarmPastel(imageData) {
   return imageData;
 }
 
-// 4. Classic Monochrome Photo Booth: High contrast B&W with noise
+// This is just the box-muller transformation.
 function filterPhotobooth(imageData) {
   const d = imageData.data;
   for (let i = 0; i < d.length; i += 4) {
@@ -182,7 +178,7 @@ function filterPhotobooth(imageData) {
   return imageData;
 }
 
-// 5. Bypass / Raw
+// Bypass all filters and use raw camera data
 function filterRaw(imageData) {
   return imageData;
 }
@@ -213,10 +209,6 @@ function applyFilterInsideBox(box) {
   applyActiveFilter(region);
   ctx.putImageData(region, x, y);
 }
-
-// ============================================================================
-// Gallery & Photo Strip Export
-// ============================================================================
 
 function addToGallery(snapshotCanvas) {
   if (galleryEntries.length >= STRIP_MAX_PHOTOS) return;
@@ -348,10 +340,6 @@ function resetPuzzleOnly() {
   updateProgressBadge();
 }
 
-// ============================================================================
-// Viewport & Hardware Initialization
-// ============================================================================
-
 function fitCanvasToWindow() {
   const stageEl = document.getElementById("stage");
   const vw = stageEl.clientWidth;
@@ -463,9 +451,7 @@ async function initHandLandmarker() {
   }
 }
 
-// ============================================================================
-// Gesture Detection & Math Helpers
-// ============================================================================
+// maths is for nerds. Im a nerd.
 
 function dist2D(a, b) {
   const dx = a.x - b.x;
@@ -573,10 +559,6 @@ function shuffle(arr) {
   }
   return arr;
 }
-
-// ============================================================================
-// Snapshot Slicing & Puzzle Generation
-// ============================================================================
 
 function finishCountdownAndCapture(box) {
   countdown.active = false;
@@ -840,9 +822,7 @@ function clampPieceToBoard(piece) {
   piece.y = Math.min(Math.max(piece.y, box.y), box.y + box.height - piece.h);
 }
 
-// ============================================================================
-// Canvas Overlays & Skeletons
-// ============================================================================
+// skellington on the hands
 
 function drawBoardAndPieces() {
   const box = puzzle.boardBox;
@@ -995,10 +975,6 @@ function drawHandSkeletonsOverBoard(handsLandmarks, box) {
   }
 }
 
-// ============================================================================
-// Shatter Physics Animation
-// ============================================================================
-
 function startShatter(sourceCanvas, box) {
   const cols = SHATTER_COLS;
   const rows = SHATTER_ROWS;
@@ -1114,9 +1090,7 @@ function handleFistReset() {
   }
 }
 
-// ============================================================================
-// Core State Machine & Gesture Processing
-// ============================================================================
+// This is utter bullshit. God help us all.
 
 let handLandmarker = null;
 let fistHoldCounter = 0;
@@ -1333,10 +1307,6 @@ async function boot() {
     }
   }
 }
-
-// ============================================================================
-// UI Event Listeners
-// ============================================================================
 
 loaderRetry.addEventListener("click", () => {
   boot();
